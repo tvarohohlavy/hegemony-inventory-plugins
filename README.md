@@ -18,7 +18,7 @@ The SDK and all provider wheels are released together from unified semver tags s
 Public source is licensed under `AGPL-3.0-or-later`; commercial licenses may be
 available separately. See [Licensing](LICENSING.md).
 
-Contributions require the Hegemony Contributor License Agreement. See
+Contributions require the [Hegemony Contributor License Agreement](CLA.md). See
 [Contributing](CONTRIBUTING.md).
 
 ## Install From A Release
