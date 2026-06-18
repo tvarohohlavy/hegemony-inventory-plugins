@@ -15,6 +15,12 @@ Standalone release repo for Hegemony inventory plugin packages:
 The SDK and all provider wheels are released together from unified semver tags such as
 `v0.1.0`. Provider wheels depend on the exact SDK version from the same release.
 
+Public source is licensed under `AGPL-3.0-or-later`; commercial licenses may be
+available separately. See [Licensing](LICENSING.md).
+
+Contributions require the Hegemony Contributor License Agreement. See
+[Contributing](CONTRIBUTING.md).
+
 ## Install From A Release
 
 Install the SDK wheel and whichever provider wheels the container should enable:
@@ -70,3 +76,9 @@ task lock
 
 Tags must match package metadata. A `v0.1.0` tag publishes four wheels plus
 `SHA256SUMS` to the matching GitHub Release.
+
+Releases are intended to be immutable: the release workflow fails if a GitHub
+Release for the tag already exists and never replaces published assets. If a
+release artifact is wrong, cut a new patch tag instead of mutating the existing
+release. The release workflow also creates GitHub artifact attestations for the
+wheel files and checksum file.
