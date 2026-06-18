@@ -17,9 +17,10 @@ by this public repository; they are granted only through a separate commercial
 agreement with the rights holder. Contact
 [contact@hegemony.sh](mailto:contact@hegemony.sh) for commercial licensing.
 
-External contributions are accepted only under the Hegemony Contributor License
-Agreement. The CLA must grant Hegemony the rights needed to distribute accepted
-contributions under both the public AGPL license and separate commercial terms.
+External contributions are accepted only under the
+[Hegemony Contributor License Agreement](CLA.md). The CLA must grant Hegemony the
+rights needed to distribute accepted contributions under both the public AGPL
+license and separate commercial terms.
 
 Keep source file SPDX identifiers as:
 
