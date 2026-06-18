@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -45,6 +47,15 @@ jobs:
       - name: Verify tag matches package versions
         run: uv run python scripts/verify_release_version.py "${GITHUB_REF_NAME}"
 
+      - name: Verify release does not already exist
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "::error::Release ${GITHUB_REF_NAME} already exists; releases are immutable."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Run tests
         run: uv run pytest -v --tb=short
 
@@ -57,15 +68,18 @@ jobs:
       - name: Generate checksums
         run: sha256sum dist/*.whl > SHA256SUMS
 
+      - name: Attest release asset provenance
+        uses: actions/attest@281a49d4cbb0a72c9575a50d18f6deb515a11deb # v4
+        with:
+          subject-path: |
+            dist/*.whl
+            SHA256SUMS
+
       - name: Publish GitHub Release assets
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" dist/*.whl SHA256SUMS --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" dist/*.whl SHA256SUMS \
-              --title "${GITHUB_REF_NAME}" \
-              --notes "Hegemony inventory SDK and provider plugin wheels for ${GITHUB_REF_NAME}." \
-              --verify-tag
-          fi
+          gh release create "${GITHUB_REF_NAME}" dist/*.whl SHA256SUMS \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Hegemony inventory SDK and provider plugin wheels for ${GITHUB_REF_NAME}." \
+            --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
