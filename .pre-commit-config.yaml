@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Travnik <jakub.travnik@gmail.com>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  # ========== General checks (fast, read-only) ==========
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+        name: "Checks: merge conflict markers"
+      - id: check-yaml
+        name: "Checks: YAML syntax"
+      - id: check-json
+        name: "Checks: JSON syntax"
+      - id: check-toml
+        name: "Checks: TOML syntax"
+      - id: end-of-file-fixer
+        name: "Checks: EOF newline"
+      - id: trailing-whitespace
+        name: "Checks: trailing whitespace"
+        args: [--markdown-linebreak-ext=md]
+
+  # Validate pyproject.toml structure
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.24.1
+    hooks:
+      - id: validate-pyproject
+        name: "Python: pyproject validation"
+
+  # Typo checker (fast, Rust-based)
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.42.1
+    hooks:
+      - id: typos
+        name: "Checks: typo scan"
+
+  # GitHub Actions security scanner
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.22.0
+    hooks:
+      - id: zizmor
+        name: "Security: GitHub Actions policy scan (Zizmor)"
+        args: ["--config", ".github/zizmor.yml"]
+
+  # GitHub Actions workflow syntax validator
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.36.0
+    hooks:
+      - id: check-github-workflows
+        name: "CI: GitHub workflow schema validation"
+
+  # REUSE 3.3 (SPDX) compliance
+  - repo: https://github.com/fsfe/reuse-tool
+    rev: v6.2.0
+    hooks:
+      - id: reuse
+        name: "Licensing: REUSE 3.3 SPDX compliance"
+
+  # ========== Python ==========
+  # Python: Ruff linting and formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.13
+    hooks:
+      - id: ruff
+        name: "Python: Ruff lint (auto-fix)"
+        args: ["--fix"]
+        files: ^(packages|plugins|tests|scripts)/
+      - id: ruff-format
+        name: "Python: Ruff format"
+        files: ^(packages|plugins|tests|scripts)/
+
+  # Python: ty type checking and provider tests
+  - repo: local
+    hooks:
+      - id: ty
+        name: "Checks: Python typecheck (ty)"
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        files: \.py$
+
+      - id: pytest
+        name: "Checks: Python tests (pytest)"
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        files: ^(packages|plugins|tests)/
+
+  # ========== Security ==========
+  # Secrets detection
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        name: "Security: secrets scan (gitleaks)"
+
+  # ========== Commit message ==========
+  # Conventional Commits lint — mirrors Hegemony CI/pre-commit behavior.
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: v9.22.0
+    hooks:
+      - id: commitlint
+        name: "Checks: commit message (commitlint)"
+        stages: [commit-msg]
+        additional_dependencies:
+          - "@commitlint/config-conventional@19"

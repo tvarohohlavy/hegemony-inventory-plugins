@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Trávník <jakub.travnik@gmail.com>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""Object-type declaration API.
+
+A plugin declares an object type with an ``ObjectTypeSpec``: an identity, a field
+schema (JSON Schema, optionally derived from a Pydantic model), relationship hints, and
+UI hints. The core platform exposes these as manifests so the schema-driven UI can render
+list/detail/form pages and inventory-submenu entries with no plugin JavaScript.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectTypeRelationshipSpec:
+    """Declares a relationship edge this object type can carry."""
+
+    rel: str
+    target_object_type: str
+    label: str | None = None
+    many: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectTypeUIHints:
+    """Optional hints driving the generic schema-driven UI.
+
+    ``custom_component`` is the escape hatch: a core-bundled component id for a bespoke
+    renderer. It is never plugin-shipped JavaScript.
+    """
+
+    icon: str | None = None
+    columns: tuple[str, ...] = ()
+    detail_layout: tuple[str, ...] = ()
+    search_fields: tuple[str, ...] = ()
+    default_sort: str | None = None
+    custom_component: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectTypeSpec:
+    """A registered inventory object type."""
+
+    id: str
+    display_name: str
+    plural: str | None = None
+    description: str | None = None
+    field_schema: Mapping[str, Any] = field(default_factory=dict)
+    identity_keys: tuple[str, ...] = ()
+    relationships: tuple[ObjectTypeRelationshipSpec, ...] = ()
+    ui: ObjectTypeUIHints = field(default_factory=ObjectTypeUIHints)
+
+    @classmethod
+    def from_model(
+        cls,
+        *,
+        id: str,
+        display_name: str,
+        model: Any,
+        plural: str | None = None,
+        description: str | None = None,
+        identity_keys: Sequence[str] = (),
+        relationships: Sequence[ObjectTypeRelationshipSpec] = (),
+        ui: ObjectTypeUIHints | None = None,
+    ) -> ObjectTypeSpec:
+        """Build a spec whose ``field_schema`` is the Pydantic model's JSON Schema."""
+        return cls(
+            id=id,
+            display_name=display_name,
+            plural=plural,
+            description=description,
+            field_schema=model.model_json_schema(),
+            identity_keys=tuple(identity_keys),
+            relationships=tuple(relationships),
+            ui=ui or ObjectTypeUIHints(),
+        )

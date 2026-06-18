@@ -1,0 +1,10 @@
+version = 1
+SPDX-PackageName = "hegemony-inventory-plugins"
+SPDX-PackageSupplier = "Jakub Travnik <jakub.travnik@gmail.com>"
+SPDX-PackageDownloadLocation = "https://github.com/tvarohohlavy/hegemony-inventory-plugins"
+
+[[annotations]]
+path = "uv.lock"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025-2026 Jakub Travnik <jakub.travnik@gmail.com>"
+SPDX-License-Identifier = "AGPL-3.0-or-later"

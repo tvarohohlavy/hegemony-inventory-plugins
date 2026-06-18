@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Travnik <jakub.travnik@gmail.com>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+version: "3"
+
+tasks:
+  setup:
+    desc: Install all workspace packages and pre-commit hooks
+    cmds:
+      - uv sync --all-packages
+      - uv run pre-commit install --install-hooks
+
+  sync:
+    desc: Install all workspace packages using the lockfile
+    cmds:
+      - uv sync --frozen --all-packages
+
+  lock:
+    desc: Refresh uv.lock
+    cmds:
+      - uv lock
+
+  fmt:
+    desc: Format Python sources
+    cmds:
+      - uv run ruff format packages plugins tests scripts
+
+  fmt:check:
+    desc: Check Python formatting
+    cmds:
+      - uv run ruff format --check packages plugins tests scripts
+
+  ruff:
+    desc: Lint Python sources
+    cmds:
+      - uv run ruff check packages plugins tests scripts
+
+  ruff:fix:
+    desc: Lint Python sources and apply safe fixes
+    cmds:
+      - uv run ruff check --fix packages plugins tests scripts
+
+  ty:
+    desc: Type check Python sources
+    cmds:
+      - uv run ty check
+
+  test:
+    desc: Run Python tests
+    cmds:
+      - uv run pytest
+
+  test:verbose:
+    desc: Run Python tests with verbose output
+    cmds:
+      - uv run pytest -v --tb=short
+
+  reuse:lint:
+    desc: Verify REUSE 3.3 SPDX compliance
+    cmds:
+      - uv run reuse lint
+
+  lint:
+    desc: Run Python lint, formatting, typecheck, and REUSE checks
+    cmds:
+      - task: ruff
+      - task: fmt:check
+      - task: ty
+      - task: reuse:lint
+
+  build:
+    desc: Build all workspace wheels into dist/
+    cmds:
+      - uv run python scripts/build_wheels.py
+
+  smoke:
+    desc: Smoke-install wheels from dist/ in a clean virtual environment
+    cmds:
+      - uv run python scripts/smoke_install_wheels.py
+
+  precommit:
+    desc: Run every configured pre-commit hook
+    cmds:
+      - uv run pre-commit run --all-files
+
+  version:set:
+    desc: "Update all package versions and provider SDK pins. Usage: task version:set -- 0.1.0"
+    cmds:
+      - uv run python scripts/set_version.py {{.CLI_ARGS}}
+
+  version:verify:
+    desc: "Verify all package versions match a tag. Usage: task version:verify -- v0.1.0"
+    cmds:
+      - uv run python scripts/verify_release_version.py {{.CLI_ARGS}}
+
+  ci:
+    desc: Run the local equivalent of CI checks
+    cmds:
+      - task: sync
+      - task: lint
+      - task: test
+      - task: build
+      - task: smoke

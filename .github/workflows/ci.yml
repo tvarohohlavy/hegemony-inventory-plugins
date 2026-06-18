@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Travnik <jakub.travnik@gmail.com>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  commit-lint:
+    name: Lint Commit Messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6
+        with:
+          configFile: .commitlintrc.yaml
+
+  lint-test-build:
+    name: Lint, Test, Build Wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+        with:
+          version: "0.9.28"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-packages
+
+      - name: Run linter
+        run: uv run ruff check packages plugins tests scripts
+
+      - name: Check formatting
+        run: uv run ruff format --check packages plugins tests scripts
+
+      - name: REUSE compliance
+        run: uv run reuse lint
+
+      - name: Type check
+        run: uv run ty check
+
+      - name: Run tests
+        run: uv run pytest -v --tb=short
+
+      - name: Build wheels
+        run: uv run python scripts/build_wheels.py
+
+      - name: Smoke install wheels
+        run: uv run python scripts/smoke_install_wheels.py

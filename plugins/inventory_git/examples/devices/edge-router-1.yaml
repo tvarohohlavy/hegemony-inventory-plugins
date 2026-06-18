@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Trávník <jakub.travnik@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# One device per file. The file name stem MUST equal `external_id`
+# (this file is devices/edge-router-1.yaml -> external_id: edge-router-1).
+schema_version: 1
+kind: device
+external_id: edge-router-1
+name: edge-router-1
+mgmt_host: 10.0.0.1
+mgmt_port: 22
+platform: ios-xe
+vendor: cisco
+model: ASR1001-X
+site: emea/nl/ams01
+role: edge-router
+tags:
+  - edge
+  - production
+access_config:
+  ssh:
+    username_ref: "{{ secret('vault://devices/ssh-username') }}"
+    password_ref: "{{ secret('vault://devices/ssh-password') }}"
+  enable:
+    password_ref: "{{ secret('vault://devices/enable-password') }}"
+custom_fields:
+  asset_tag: AMS-RTR-001

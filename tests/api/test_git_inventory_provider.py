@@ -1,0 +1,455 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Trávník <jakub.travnik@gmail.com>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""Git inventory provider config and loader validation."""
+
+import textwrap
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
+
+from hegemony_inventory_git.config import GitInventoryProviderConfig
+from hegemony_inventory_git.inventory_schema import GitInventoryDeviceV1
+from hegemony_inventory_git.loader import load_git_inventory
+from hegemony_inventory_git.provider import GitInventoryProvider
+from hegemony_inventory_git.query import matches_query
+from hegemony_inventory_sdk import (
+    DeviceDescriptor,
+    InventoryProviderError,
+    ProviderCallContext,
+    ProviderErrorCode,
+    ResourceType,
+    SiteRef,
+)
+from tests.inventory_fakes import FakeGitFetcher, FakePlatformServices
+
+
+def _config(path: str) -> GitInventoryProviderConfig:
+    return GitInventoryProviderConfig(git_repo_id=uuid4(), path=path)
+
+
+def _write_yaml(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(content).strip() + "\n", encoding="utf-8")
+
+
+def _required_external_id(device: DeviceDescriptor) -> str:
+    assert device.external_id is not None
+    return device.external_id
+
+
+def test_git_inventory_path_rejects_absolute_paths() -> None:
+    with pytest.raises(ValidationError, match="safe repository-relative path"):
+        _config("/inventory")
+
+
+def test_git_inventory_path_normalizes_trailing_slash() -> None:
+    config = _config("inventory/devices/")
+
+    assert config.path == "inventory/devices"
+
+
+def test_git_inventory_branch_rejects_whitespace_only() -> None:
+    with pytest.raises(ValidationError, match="branch is required"):
+        GitInventoryProviderConfig(git_repo_id=uuid4(), branch="   ", path="inventory")
+
+
+def test_git_inventory_query_splits_comma_delimited_names() -> None:
+    device = GitInventoryDeviceV1(
+        schema_version=1,
+        kind="device",
+        external_id="edge-01",
+        name="edge-01",
+        mgmt_host="192.0.2.10",
+    )
+
+    assert matches_query(device, {}, "name=core-*, edge-*") is True
+    assert matches_query(device, {}, "name=core-*, dist-*") is False
+
+
+def test_git_inventory_loader_reports_missing_inventory_path(tmp_path: Path) -> None:
+    result = load_git_inventory(tmp_path, "inventory")
+
+    assert [error.message for error in result.errors] == ["Inventory path does not exist"]
+
+
+def test_git_inventory_loader_rejects_symlinked_section_dirs(tmp_path: Path) -> None:
+    inventory = tmp_path / "inventory"
+    inventory.mkdir()
+    real_devices = tmp_path / "real-devices"
+    real_devices.mkdir()
+    (inventory / "devices").symlink_to(real_devices, target_is_directory=True)
+
+    result = load_git_inventory(tmp_path, "inventory")
+
+    assert result.devices == []
+    assert any(error.file_path == "inventory/devices" for error in result.errors)
+    assert any(error.message == "Symlinked directories are not allowed" for error in result.errors)
+
+
+def test_git_inventory_loader_rejects_unknown_site_reference(tmp_path: Path) -> None:
+    _write_yaml(
+        tmp_path / "inventory" / "devices" / "edge-01.yaml",
+        """
+        schema_version: 1
+        kind: device
+        external_id: edge-01
+        name: edge-01
+        mgmt_host: 192.0.2.10
+        site: emea/nl/ams01
+        """,
+    )
+
+    result = load_git_inventory(tmp_path, "inventory")
+
+    assert [error.message for error in result.errors] == ["Unknown site: emea/nl/ams01"]
+
+
+def test_git_inventory_loader_rejects_unknown_site_parent(tmp_path: Path) -> None:
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "cz.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: cz
+        name: Czechia
+        """,
+    )
+
+    result = load_git_inventory(tmp_path, "inventory")
+
+    assert [error.message for error in result.errors] == ["Unknown parent site: emea"]
+
+
+def test_git_inventory_loader_allows_duplicate_local_site_external_ids_in_different_paths(
+    tmp_path: Path,
+) -> None:
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "emea.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: emea
+        name: EMEA
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "dc.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: dc
+        name: Prague DC
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "amer" / "amer.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: amer
+        name: Americas
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "amer" / "dc.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: dc
+        name: Prague DC
+        """,
+    )
+
+    result = load_git_inventory(tmp_path, "inventory")
+
+    assert result.errors == []
+    assert set(result.sites) == {"amer", "amer/dc", "emea", "emea/dc"}
+    assert result.sites["emea/dc"].parent_external_id == "emea"
+    assert result.sites["amer/dc"].parent_external_id == "amer"
+
+
+def test_git_inventory_loader_rejects_duplicate_site_paths_from_file_and_directory_forms(
+    tmp_path: Path,
+) -> None:
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: emea
+        name: EMEA Flat
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "emea.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: emea
+        name: EMEA Nested
+        """,
+    )
+
+    result = load_git_inventory(tmp_path, "inventory")
+
+    assert [error.message for error in result.errors] == ["Duplicate site external_id: emea"]
+
+
+@pytest.mark.asyncio
+async def test_git_provider_reads_tree_from_injected_git_fetcher(tmp_path: Path) -> None:
+    """The provider resolves its working tree via the injected GitFetcher, not a DB/transport."""
+    provider = GitInventoryProvider(
+        provider_id="git:primary",
+        config={
+            "git_repo_id": str(uuid4()),
+            "path": "inventory",
+            "default_access_config": {
+                "ssh": {
+                    "username_ref": "{{ secret('vault://devices/default-ssh-username') }}",
+                }
+            },
+        },
+        services=FakePlatformServices(
+            provider_id="git:primary",
+            provider_type="git",
+            git=FakeGitFetcher(path=str(tmp_path)),
+        ),
+    )
+
+    # The fake working tree has no inventory/ directory, so the loader fails closed
+    # and the provider surfaces a safe schema-validation error.
+    with pytest.raises(InventoryProviderError) as exc_info:
+        await provider.query_devices(
+            "",
+            context=ProviderCallContext(provider_id="git:primary", operation="query_devices"),
+        )
+
+    assert exc_info.value.envelope.code == ProviderErrorCode.SCHEMA_VALIDATION_FAILED
+
+
+@pytest.mark.asyncio
+async def test_git_provider_allows_duplicate_site_names_under_different_paths(
+    tmp_path: Path,
+) -> None:
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "emea.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: emea
+        name: EMEA
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "dc.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: dc
+        name: Prague DC
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "amer" / "amer.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: amer
+        name: AMER
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "amer" / "dc.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: dc
+        name: Prague DC
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "devices" / "edge-emea.yaml",
+        """
+        schema_version: 1
+        kind: device
+        external_id: edge-emea
+        name: edge-emea
+        mgmt_host: 192.0.2.11
+        site: emea/dc
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "devices" / "edge-amer.yaml",
+        """
+        schema_version: 1
+        kind: device
+        external_id: edge-amer
+        name: edge-amer
+        mgmt_host: 192.0.2.12
+        site: amer/dc
+        """,
+    )
+
+    provider = GitInventoryProvider(
+        provider_id="git:primary",
+        config={"git_repo_id": str(uuid4()), "path": "inventory"},
+        services=FakePlatformServices(
+            provider_id="git:primary",
+            provider_type="git",
+            git=FakeGitFetcher(path=str(tmp_path)),
+        ),
+    )
+
+    emea_devices = await provider.query_devices(
+        "site=emea/dc",
+        context=ProviderCallContext(provider_id="git:primary", operation="query_devices"),
+    )
+    amer_devices = await provider.query_devices(
+        "site=amer/dc",
+        context=ProviderCallContext(provider_id="git:primary", operation="query_devices"),
+    )
+    named_devices = await provider.query_devices(
+        "site=Prague DC",
+        context=ProviderCallContext(provider_id="git:primary", operation="query_devices"),
+    )
+
+    assert [_required_external_id(device) for device in emea_devices] == ["edge-emea"]
+    assert [_required_external_id(device) for device in amer_devices] == ["edge-amer"]
+    assert sorted(_required_external_id(device) for device in named_devices) == [
+        "edge-amer",
+        "edge-emea",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_git_provider_reads_sites_directory_and_site_hierarchy(tmp_path: Path) -> None:
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "emea.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: emea
+        name: EMEA
+        location: Europe
+        tags:
+          region: emea
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "nl" / "nl.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: nl
+        name: Netherlands
+        location: Netherlands
+        tags:
+          country: nl
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "sites" / "emea" / "nl" / "ams01.yaml",
+        """
+        schema_version: 1
+        kind: site
+        external_id: ams01
+        name: Amsterdam DC
+        location: Amsterdam
+        tags:
+          facility: dc
+        custom_fields:
+          timezone: CET
+        """,
+    )
+    _write_yaml(
+        tmp_path / "inventory" / "devices" / "edge-01.yaml",
+        """
+        schema_version: 1
+        kind: device
+        external_id: edge-01
+        name: edge-01
+        mgmt_host: 192.0.2.10
+        site: emea/nl/ams01
+        tags:
+          - edge
+          - production
+        """,
+    )
+
+    provider = GitInventoryProvider(
+        provider_id="git:primary",
+        config={
+            "git_repo_id": str(uuid4()),
+            "path": "inventory",
+            "default_access_config": {
+                "ssh": {
+                    "username_ref": "{{ secret('vault://devices/default-ssh-username') }}",
+                }
+            },
+        },
+        services=FakePlatformServices(
+            provider_id="git:primary",
+            provider_type="git",
+            git=FakeGitFetcher(path=str(tmp_path)),
+        ),
+    )
+
+    sites = await provider.list_sites(
+        context=ProviderCallContext(provider_id="git:primary", operation="list_sites")
+    )
+    site = await provider.get(
+        ResourceType.SITE,
+        "emea/nl/ams01",
+        context=ProviderCallContext(provider_id="git:primary", operation="get"),
+    )
+    devices = await provider.query_devices(
+        "site=emea/nl/ams01",
+        context=ProviderCallContext(provider_id="git:primary", operation="query_devices"),
+    )
+
+    assert isinstance(site, SiteRef)
+    assert [item.external_id for item in sites] == ["emea", "emea/nl", "emea/nl/ams01"]
+    assert sites[1].parent_external_id == "emea"
+    assert site.parent_external_id == "emea/nl"
+    assert site.location == "Amsterdam"
+    assert site.tags == {"facility": "dc"}
+    assert site.descriptive == {"timezone": "CET"}
+    assert len(devices) == 1
+    assert devices[0].site is not None
+    assert devices[0].site.external_id == "emea/nl/ams01"
+    assert devices[0].site.parent_external_id == "emea/nl"
+    assert devices[0].native_tags == ("edge", "production")
+    assert devices[0].access_config == {
+        "ssh": {
+            "username_ref": "{{ secret('vault://devices/default-ssh-username') }}",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_git_provider_test_connection_preserves_safe_details(tmp_path: Path) -> None:
+    provider = GitInventoryProvider(
+        provider_id="git:primary",
+        config={"git_repo_id": str(uuid4()), "path": "inventory"},
+        services=FakePlatformServices(
+            provider_id="git:primary",
+            provider_type="git",
+            git=FakeGitFetcher(path=str(tmp_path)),
+        ),
+    )
+
+    result = await provider.test_connection(
+        context=ProviderCallContext(provider_id="git:primary", operation="test_connection")
+    )
+
+    assert result.ok is False
+    assert result.message == "Git inventory validation failed"
+    assert result.error is not None
+    assert result.error["code"] == ProviderErrorCode.SCHEMA_VALIDATION_FAILED.value
+    assert result.safe_details == {
+        "errors": [{"file_path": "inventory", "message": "Inventory path does not exist"}]
+    }

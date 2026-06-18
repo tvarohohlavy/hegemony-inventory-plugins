@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Trávník <jakub.travnik@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Leaf sites can stay as a single YAML file under their parent directory.
+# Its full site path is derived from the relative path: `emea/nl/ams01`.
+schema_version: 1
+kind: site
+external_id: ams01
+name: Amsterdam DC
+location: Amsterdam
+tags:
+  facility: dc
+custom_fields:
+  timezone: CET

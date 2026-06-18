@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Trávník <jakub.travnik@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Root sites with children live in a directory whose metadata file has the same
+# basename as the directory (`sites/emea/emea.yaml` -> site path `emea`).
+schema_version: 1
+kind: site
+external_id: emea
+name: EMEA
+location: Europe
+tags:
+  region: emea

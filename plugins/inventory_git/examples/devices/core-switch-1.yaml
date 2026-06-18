@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2025-2026 Jakub Trávník <jakub.travnik@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# A minimal device. `platform` is intentionally omitted: when absent, the core
+# inventory service fills in its default platform during materialization.
+schema_version: 1
+kind: device
+external_id: core-switch-1
+name: core-switch-1
+mgmt_host: 10.0.0.2
+site: emea/nl/ams01
+role: core-switch
+tags:
+  - core
