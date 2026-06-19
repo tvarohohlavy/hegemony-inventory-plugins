@@ -37,7 +37,7 @@ installing them. The example installs all providers; remove any wheel names for 
 that deployment should not enable.
 
 ```bash
-VERSION=0.2.0
+VERSION=0.2.1
 API_CONTAINER=<your API container name>
 
 docker exec -u root -it "${API_CONTAINER}" bash -lc "
@@ -65,7 +65,7 @@ docker restart "${API_CONTAINER}"
 For development, use the same release flow against the dev API container:
 
 ```bash
-VERSION=0.2.0
+VERSION=0.2.1
 API_CONTAINER=hegemony-dev-api-1
 # then run the same docker exec install block above
 ```
