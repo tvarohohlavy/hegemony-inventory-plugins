@@ -73,6 +73,21 @@ def _render_selection_tree(tree: Mapping[str, Any]) -> str:
     return " ".join(selections)
 
 
+def _assign_nested(target: dict[str, Any], path: str, value: Any) -> None:
+    parts = [part.strip() for part in path.split(".") if part.strip()]
+    if not parts:
+        return
+
+    current = target
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
+
+
 def _safe_graphql_error_details(errors: Any) -> dict[str, Any]:
     if not isinstance(errors, list):
         return {}
@@ -477,6 +492,41 @@ class InfrahubInventoryProvider(InventoryProvider):
             if isinstance(edge, Mapping) and isinstance(edge.get("node"), Mapping)
         ]
 
+    def _merged_access_config(self, node: Mapping[str, Any]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        defaults = (
+            self.config.default_access_config
+            if isinstance(self.config.default_access_config, Mapping)
+            else {}
+        )
+
+        mapped_access_config: dict[str, Any] = {}
+        for field_key in self._field_map:
+            if field_key.startswith("access_config."):
+                mapped_value = _lookup_path(node, self._field_map[field_key])
+                if mapped_value is not None:
+                    _assign_nested(
+                        mapped_access_config,
+                        field_key.removeprefix("access_config."),
+                        mapped_value,
+                    )
+
+        for scope in ("ssh", "enable"):
+            scope_values: dict[str, Any] = {}
+
+            default_scope = defaults.get(scope)
+            if isinstance(default_scope, Mapping):
+                scope_values.update(default_scope)
+
+            mapped_scope = mapped_access_config.get(scope)
+            if isinstance(mapped_scope, Mapping):
+                scope_values.update(mapped_scope)
+
+            if scope_values:
+                merged[scope] = scope_values
+
+        return merged
+
     def _map_device(self, node: Mapping[str, Any]) -> DeviceDescriptor:
         fm = self._field_map
 
@@ -512,18 +562,8 @@ class InfrahubInventoryProvider(InventoryProvider):
         raw_tags = _mapped_value("tags", DEFAULT_FIELD_MAP["tags"]) or []
         if not isinstance(raw_tags, list):
             raw_tags = [raw_tags]
-        access_config = {
-            "ssh": {
-                "username_ref": _mapped_value("access_config.ssh.username_ref"),
-                "password_ref": _mapped_value("access_config.ssh.password_ref"),
-                "private_key_ref": _mapped_value("access_config.ssh.private_key_ref"),
-            },
-            "enable": {
-                "password_ref": _mapped_value("access_config.enable.password_ref"),
-            },
-        }
         validated_access_config = self._services.validate_access_config(
-            access_config,
+            self._merged_access_config(node),
             operation="query_devices",
             allow_raw_literals=False,
         )

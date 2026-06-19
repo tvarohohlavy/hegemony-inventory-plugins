@@ -55,6 +55,13 @@ The device `platform` is mapped from the configured `field_map` path
 no value and the **core inventory service** applies its default platform during
 materialization.
 
+### Access config
+
+Optional access-config refs can be mapped through `field_map` keys such as
+`access_config.ssh.username_ref` or `access_config.enable.password_ref`. Provider-level
+`default_access_config` is merged first, and mapped device-specific values override those
+defaults when present.
+
 ## Supported object types
 
 `device`, `site`.
