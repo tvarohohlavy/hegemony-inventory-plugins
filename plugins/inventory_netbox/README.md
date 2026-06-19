@@ -46,6 +46,7 @@ Minimal config:
   "url": "https://netbox.example.com",
   "token_ref": "{{ secret('vault://netbox/token') }}"
 }
+```
 
 Built-in `field_map` defaults:
 
@@ -67,7 +68,6 @@ Built-in `field_map` defaults:
   "access_config.enable.password_ref": "custom_fields.hegemony_enable_password_ref",
   "access_config.ssh.private_key_ref": "custom_fields.hegemony_ssh_private_key_ref"
 }
-```
 ```
 
 ### Platform
