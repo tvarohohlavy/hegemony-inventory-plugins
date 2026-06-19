@@ -73,6 +73,40 @@ def _render_selection_tree(tree: Mapping[str, Any]) -> str:
     return " ".join(selections)
 
 
+def _safe_graphql_error_details(errors: Any) -> dict[str, Any]:
+    if not isinstance(errors, list):
+        return {}
+
+    safe_errors: builtins.list[dict[str, Any]] = []
+    for error in errors[:10]:
+        if not isinstance(error, Mapping):
+            continue
+
+        safe_error: dict[str, Any] = {}
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            safe_error["message"] = message.strip()
+
+        path = error.get("path")
+        if isinstance(path, list):
+            safe_error["path"] = [str(part) for part in path if part is not None]
+
+        extensions = error.get("extensions")
+        if isinstance(extensions, Mapping):
+            safe_extensions: dict[str, str] = {}
+            for key in ("code", "classification"):
+                value = extensions.get(key)
+                if value is not None:
+                    safe_extensions[key] = str(value)
+            if safe_extensions:
+                safe_error["extensions"] = safe_extensions
+
+        if safe_error:
+            safe_errors.append(safe_error)
+
+    return {"graphql_errors": safe_errors} if safe_errors else {}
+
+
 class InfrahubInventoryProvider(InventoryProvider):
     provider_type = "infrahub"
     capabilities = frozenset({Capability.READ, Capability.QUERY})
@@ -165,13 +199,17 @@ class InfrahubInventoryProvider(InventoryProvider):
     async def list_sites(
         self, *, limit: int | None = None, context: ProviderCallContext
     ) -> builtins.list[SiteRef]:
-        descriptors = await self.query_devices(
-            "", limit=limit or self._services.limits.max_preview_devices, context=context
-        )
+        result_limit = limit or self._services.limits.max_preview_devices
+        payload = await self._graphql(self._build_site_query(result_limit), {}, context)
+        nodes = self._extract_nodes(payload)
         seen: dict[str, SiteRef] = {}
-        for descriptor in descriptors:
-            if descriptor.site:
-                seen.setdefault(descriptor.site.external_id, descriptor.site)
+        site_path = self._site_query_path()
+        for node in nodes:
+            site_ref = self._site_ref_from_value(_lookup_path(node, site_path))
+            if site_ref is not None:
+                seen.setdefault(site_ref.external_id, site_ref)
+            if len(seen) >= result_limit:
+                break
         return list(seen.values())
 
     async def test_connection(self, *, context: ProviderCallContext) -> ProviderTestResult:
@@ -218,6 +256,20 @@ class InfrahubInventoryProvider(InventoryProvider):
         selection_set = _render_selection_tree(_build_selection_tree(self._query_selection_paths()))
         return f"""
         query HegemonyInventoryDevices {{
+          {kind}(limit: {limit}) {{
+            edges {{ node {{ {selection_set} }} }}
+          }}
+        }}
+        """
+
+    def _site_query_path(self) -> str:
+        return (self._field_map.get("site") or DEFAULT_FIELD_MAP["site"]).strip()
+
+    def _build_site_query(self, limit: int) -> str:
+        kind = self.config.device_kind
+        selection_set = _render_selection_tree(_build_selection_tree([self._site_query_path()]))
+        return f"""
+        query HegemonyInventorySites {{
           {kind}(limit: {limit}) {{
             edges {{ node {{ {selection_set} }} }}
           }}
@@ -364,6 +416,7 @@ class InfrahubInventoryProvider(InventoryProvider):
                                 ProviderErrorCode.MALFORMED_QUERY,
                                 "Infrahub GraphQL query failed",
                                 context.operation,
+                                safe_details=_safe_graphql_error_details(data.get("errors")),
                             )
                         if not isinstance(data.get("data"), dict):
                             raise self._error(
@@ -454,11 +507,7 @@ class InfrahubInventoryProvider(InventoryProvider):
         platform_value = _mapped_value("platform", DEFAULT_FIELD_MAP["platform"])
         platform = str(platform_value) if platform_value else None
         site_value = _mapped_value("site", DEFAULT_FIELD_MAP["site"])
-        site = (
-            SiteRef(provider_id=self.id, external_id=str(site_value), name=str(site_value))
-            if site_value
-            else None
-        )
+        site = self._site_ref_from_value(site_value)
         role = _mapped_value("role", DEFAULT_FIELD_MAP["role"])
         raw_tags = _mapped_value("tags", DEFAULT_FIELD_MAP["tags"]) or []
         if not isinstance(raw_tags, list):
@@ -495,6 +544,16 @@ class InfrahubInventoryProvider(InventoryProvider):
             descriptive={"branch": self.config.branch},
             source_version={"branch": self.config.branch},
         )
+
+    def _site_ref_from_value(self, site_value: Any) -> SiteRef | None:
+        if site_value is None:
+            return None
+
+        site_text = str(site_value).strip()
+        if not site_text:
+            return None
+
+        return SiteRef(provider_id=self.id, external_id=site_text, name=site_text)
 
     def _matches_expr(self, descriptor: DeviceDescriptor, expr: str) -> bool:
         parsed = parse_qs(expr.lstrip("?"), keep_blank_values=False)

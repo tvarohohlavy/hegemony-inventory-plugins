@@ -51,7 +51,7 @@ Minimal config:
 ### Platform
 
 The device `platform` is mapped from the configured `field_map` path
-(default `platform.value`). When Infrahub has no platform for a device, the provider emits
+(default `platform.node.name.value`). When Infrahub has no platform for a device, the provider emits
 no value and the **core inventory service** applies its default platform during
 materialization.
 
