@@ -17,13 +17,9 @@ the `hegemony.inventory_plugins` entry-point group
 ## Install
 
 Provider wheels are **opt-in** — they are not bundled in the default images.
-
-```bash
-pip install hegemony-inventory-netbox
-# restart the API/worker so the plugin is registered
-```
-
-For Docker, add the wheel to the image that runs the API and the inventory worker.
+See the root
+[Install From A Release](../../README.md#install-from-a-release) guide for Docker
+commands, checksum verification, and local-wheel development installs.
 
 ## Configure
 

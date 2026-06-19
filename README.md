@@ -23,15 +23,75 @@ Contributions require the [Hegemony Contributor License Agreement](CLA.md). See
 
 ## Install From A Release
 
-Install the SDK wheel and whichever provider wheels the container should enable:
+Provider wheels are opt-in. Hegemony images already include the matching
+`hegemony-inventory-sdk` in `/opt/venv`, while provider wheels are installed only in
+deployments that need them.
+
+The API process discovers provider entry points and runs inventory syncs, so install
+providers into each API container that should serve those providers. Restart the API after
+installing so the registry reloads entry points. Do not use `--system`; Hegemony runs from
+`/opt/venv`.
+
+Released wheels are published with a `SHA256SUMS` file. Verify downloaded wheels before
+installing them. The example installs all providers; remove any wheel names for providers
+that deployment should not enable.
 
 ```bash
-uv pip install --system \
-  https://github.com/tvarohohlavy/hegemony-inventory-plugins/releases/download/v0.1.0/hegemony_inventory_sdk-0.1.0-py3-none-any.whl \
-  https://github.com/tvarohohlavy/hegemony-inventory-plugins/releases/download/v0.1.0/hegemony_inventory_netbox-0.1.0-py3-none-any.whl \
-  https://github.com/tvarohohlavy/hegemony-inventory-plugins/releases/download/v0.1.0/hegemony_inventory_infrahub-0.1.0-py3-none-any.whl \
-  https://github.com/tvarohohlavy/hegemony-inventory-plugins/releases/download/v0.1.0/hegemony_inventory_git-0.1.0-py3-none-any.whl
+VERSION=0.2.0
+API_CONTAINER=<your API container name>
+
+docker exec -u root -it "${API_CONTAINER}" bash -lc "
+set -euo pipefail
+version=${VERSION}
+base=https://github.com/tvarohohlavy/hegemony-inventory-plugins/releases/download/v\${version}
+tmp=\$(mktemp -d)
+cd \"\${tmp}\"
+curl -fsSLO \"\${base}/SHA256SUMS\"
+for wheel in \
+  hegemony_inventory_netbox-\${version}-py3-none-any.whl \
+  hegemony_inventory_infrahub-\${version}-py3-none-any.whl \
+  hegemony_inventory_git-\${version}-py3-none-any.whl
+do
+  curl -fsSLO \"\${base}/\${wheel}\"
+  grep \"  \${wheel}$\" SHA256SUMS | sha256sum -c -
+done
+uv pip install --python /opt/venv/bin/python --no-deps ./*.whl
+rm -rf \"\${tmp}\"
+"
+
+docker restart "${API_CONTAINER}"
 ```
+
+For development, use the same release flow against the dev API container:
+
+```bash
+VERSION=0.2.0
+API_CONTAINER=hegemony-dev-api-1
+# then run the same docker exec install block above
+```
+
+Or build local wheels from this repository and copy them into the running dev API
+container:
+
+```bash
+cd ../hegemony-inventory-plugins
+task build
+
+API_CONTAINER=hegemony-dev-api-1
+docker exec -u root "${API_CONTAINER}" mkdir -p /tmp/inventory-wheels
+docker cp dist/. "${API_CONTAINER}:/tmp/inventory-wheels/"
+docker exec -u root -it "${API_CONTAINER}" bash -lc '
+uv pip install --python /opt/venv/bin/python --no-deps \
+  /tmp/inventory-wheels/hegemony_inventory_sdk-*.whl \
+  /tmp/inventory-wheels/hegemony_inventory_netbox-*.whl \
+  /tmp/inventory-wheels/hegemony_inventory_infrahub-*.whl \
+  /tmp/inventory-wheels/hegemony_inventory_git-*.whl
+'
+docker restart "${API_CONTAINER}"
+```
+
+These Docker-command installs are runtime changes. Re-run them after recreating the API
+container or replacing the image.
 
 ## Development
 
