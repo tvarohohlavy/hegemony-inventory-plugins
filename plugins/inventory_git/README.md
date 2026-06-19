@@ -18,11 +18,9 @@ the `hegemony.inventory_plugins` entry-point group
 ## Install
 
 Provider wheels are **opt-in** — they are not bundled in the default images.
-
-```bash
-pip install hegemony-inventory-git
-# restart the API/worker so the plugin is registered
-```
+See the root
+[Install From A Release](../../README.md#install-from-a-release) guide for Docker
+commands, checksum verification, and local-wheel development installs.
 
 ## How it works
 

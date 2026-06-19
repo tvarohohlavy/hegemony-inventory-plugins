@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from hegemony_inventory_netbox import provider as netbox_provider_module
+from hegemony_inventory_netbox.config import NetBoxProviderConfig
 from hegemony_inventory_netbox.provider import NetBoxInventoryProvider
 from hegemony_inventory_sdk import InventoryProviderError, ProviderCallContext, ProviderErrorCode
 from tests.inventory_fakes import FakePlatformServices
@@ -234,6 +235,92 @@ def test_netbox_mapping_does_not_stringify_none_values() -> None:
 
     assert descriptor.platform is None
     assert descriptor.model is None
+
+
+def test_netbox_config_normalizes_field_map_entries() -> None:
+    config = NetBoxProviderConfig.model_validate(
+        {
+            "url": "https://netbox.example",
+            "token_ref": "vault://token",
+            "field_map": {
+                " platform ": " platform.slug ",
+                "access_config.ssh.username_ref": " custom_fields.hegemony_ssh_username_ref ",
+                "": "name",
+            },
+        }
+    )
+
+    assert config.field_map == {
+        "platform": "platform.slug",
+        "access_config.ssh.username_ref": "custom_fields.hegemony_ssh_username_ref",
+    }
+
+
+def test_netbox_mapping_uses_generic_field_map_and_default_access_config() -> None:
+    provider = _provider(
+        {
+            "field_map": {
+                "external_id": "id",
+                "name": "name",
+                "display_name": "display",
+                "hostname": "hostname",
+                "mgmt_host": "primary_ip.address",
+                "platform": "platform.slug",
+                "model": "device_type.model",
+                "site.external_id": "site.slug",
+                "site.name": "site.name",
+                "role": "device_role.slug",
+                "tags": "tags",
+                "access_config.ssh.username_ref": "custom_fields.net_ssh_user",
+                "access_config.ssh.password_ref": "custom_fields.net_ssh_password",
+            },
+            "default_access_config": {
+                "ssh": {"private_key_ref": "{{ secret('vault://shared/netbox/key') }}"},
+                "enable": {"password_ref": "{{ secret('vault://shared/netbox/enable') }}"},
+            },
+        }
+    )
+
+    descriptor = provider._map_device(
+        {
+            "id": 123,
+            "name": "router-1",
+            "display": "Router 1",
+            "hostname": "router-1.example",
+            "primary_ip": {"address": "192.0.2.10/32"},
+            "platform": {"slug": "junos"},
+            "device_type": {"model": "MX204"},
+            "site": {"slug": "prg1", "name": "Prague 1"},
+            "device_role": {"slug": "edge"},
+            "tags": [{"slug": "wan"}, {"name": "core"}],
+            "custom_fields": {
+                "net_ssh_user": "{{ secret('vault://devices/router-1/user') }}",
+                "net_ssh_password": "{{ secret('vault://devices/router-1/password') }}",
+            },
+        }
+    )
+
+    assert descriptor.external_id == "123"
+    assert descriptor.display_name == "Router 1"
+    assert descriptor.hostname == "router-1.example"
+    assert descriptor.mgmt_host == "192.0.2.10"
+    assert descriptor.platform == "junos"
+    assert descriptor.model == "MX204"
+    assert descriptor.role == "edge"
+    assert descriptor.site is not None
+    assert descriptor.site.external_id == "prg1"
+    assert descriptor.site.name == "Prague 1"
+    assert descriptor.native_tags == ("wan", "core")
+    assert descriptor.access_config == {
+        "ssh": {
+            "username_ref": "{{ secret('vault://devices/router-1/user') }}",
+            "password_ref": "{{ secret('vault://devices/router-1/password') }}",
+            "private_key_ref": "{{ secret('vault://shared/netbox/key') }}",
+        },
+        "enable": {
+            "password_ref": "{{ secret('vault://shared/netbox/enable') }}",
+        },
+    }
 
 
 def test_netbox_supports_ipam_object_types() -> None:

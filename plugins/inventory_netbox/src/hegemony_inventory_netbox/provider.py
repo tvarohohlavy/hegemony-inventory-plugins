@@ -33,7 +33,7 @@ from hegemony_inventory_sdk import (
     map_records,
 )
 
-from .config import NetBoxProviderConfig
+from .config import DEFAULT_FIELD_MAP, NetBoxProviderConfig
 
 KNOWN_AUTH_SCHEMES = frozenset({"bearer", "token", "basic"})
 
@@ -43,6 +43,37 @@ def _optional_str(value: Any) -> str | None:
         return None
     stripped = str(value).strip()
     return stripped or None
+
+
+def _lookup_path(payload: Mapping[str, Any], path: str) -> Any:
+    value: Any = payload
+    for part in path.split("."):
+        if isinstance(value, Mapping):
+            value = value.get(part)
+        elif isinstance(value, list):
+            collected = []
+            for item in value:
+                if isinstance(item, Mapping):
+                    collected.append(item.get(part))
+            value = collected
+        else:
+            return None
+    return value
+
+
+def _assign_nested(target: dict[str, Any], path: str, value: Any) -> None:
+    parts = [part.strip() for part in path.split(".") if part.strip()]
+    if not parts:
+        return
+
+    current = target
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
 
 
 # IPAM/VLAN object types served beyond device/site. Each entry pairs a NetBox API
@@ -456,38 +487,102 @@ class NetBoxInventoryProvider(InventoryProvider):
             next_url = next_raw if isinstance(next_raw, str) and next_raw else None
         return items
 
+    def _mapped_value(
+        self,
+        item: Mapping[str, Any],
+        field_key: str,
+        fallback: str | None = None,
+    ) -> Any:
+        path = self.config.field_map.get(field_key) or fallback
+        return _lookup_path(item, path) if path else None
+
+    def _merged_access_config(self, item: Mapping[str, Any]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        defaults = (
+            self.config.default_access_config
+            if isinstance(self.config.default_access_config, Mapping)
+            else {}
+        )
+
+        mapped_access_config: dict[str, Any] = {}
+        for field_key, default_path in DEFAULT_FIELD_MAP.items():
+            if field_key.startswith("access_config."):
+                mapped_value = self._mapped_value(item, field_key, default_path)
+                if mapped_value is not None:
+                    _assign_nested(
+                        mapped_access_config,
+                        field_key.removeprefix("access_config."),
+                        mapped_value,
+                    )
+
+        for scope in ("ssh", "enable"):
+            scope_values: dict[str, Any] = {}
+
+            default_scope = defaults.get(scope)
+            if isinstance(default_scope, Mapping):
+                scope_values.update(default_scope)
+
+            mapped_scope = mapped_access_config.get(scope)
+            if isinstance(mapped_scope, Mapping):
+                scope_values.update(mapped_scope)
+
+            if scope_values:
+                merged[scope] = scope_values
+
+        return merged
+
     def _map_device(self, item: Mapping[str, Any]) -> DeviceDescriptor:
-        external_id = str(item.get("id") or item.get("name") or "").strip()
-        name = str(item.get("name") or item.get("display") or external_id).strip()
-        primary_ip = item.get("primary_ip4") or item.get("primary_ip") or {}
-        if isinstance(primary_ip, Mapping):
-            mgmt_host = str(primary_ip.get("address") or "").split("/")[0]
-        else:
-            mgmt_host = str(item.get("mgmt_host") or item.get("hostname") or name)
+        external_id = str(
+            self._mapped_value(item, "external_id", DEFAULT_FIELD_MAP["external_id"])
+            or item.get("name")
+            or ""
+        ).strip()
+        name = str(
+            self._mapped_value(item, "name", DEFAULT_FIELD_MAP["name"])
+            or self._mapped_value(item, "display_name", DEFAULT_FIELD_MAP["display_name"])
+            or external_id
+        ).strip()
+        mgmt_host = str(
+            self._mapped_value(item, "mgmt_host", DEFAULT_FIELD_MAP["mgmt_host"])
+            or _lookup_path(item, "primary_ip.address")
+            or item.get("mgmt_host")
+            or self._mapped_value(item, "hostname", DEFAULT_FIELD_MAP["hostname"])
+            or name
+        ).split("/")[0]
         if not mgmt_host:
             mgmt_host = name
-        platform_raw = item.get("platform") or {}
         platform = _optional_str(
-            platform_raw.get("slug") if isinstance(platform_raw, Mapping) else platform_raw
+            self._mapped_value(item, "platform", DEFAULT_FIELD_MAP["platform"])
         )
-        site = self._map_site(item["site"]) if isinstance(item.get("site"), Mapping) else None
-        role_raw = item.get("role") or item.get("device_role") or {}
-        role = role_raw.get("slug") if isinstance(role_raw, Mapping) else None
-        raw_custom_fields = item.get("custom_fields")
-        custom_fields: Mapping[str, Any] = (
-            raw_custom_fields if isinstance(raw_custom_fields, Mapping) else {}
+        model = _optional_str(self._mapped_value(item, "model", DEFAULT_FIELD_MAP["model"]))
+        site_external_id = _optional_str(
+            self._mapped_value(item, "site.external_id", DEFAULT_FIELD_MAP["site.external_id"])
         )
-        access_config: dict[str, dict[str, Any]] = {}
-        for path, cf_name in self.config.custom_field_map.items():
-            scope, _, leaf = path.partition(".")
-            if scope and leaf:
-                access_config.setdefault(scope, {})[leaf] = custom_fields.get(cf_name)
+        site_name = (
+            _optional_str(self._mapped_value(item, "site.name", DEFAULT_FIELD_MAP["site.name"]))
+            or site_external_id
+        )
+        site = (
+            SiteRef(
+                provider_id=self.id,
+                external_id=site_external_id,
+                name=site_name or site_external_id,
+            )
+            if site_external_id
+            else self._map_site(item["site"])
+            if isinstance(item.get("site"), Mapping)
+            else None
+        )
+        role = _optional_str(
+            self._mapped_value(item, "role", DEFAULT_FIELD_MAP["role"])
+            or _lookup_path(item, "device_role.slug")
+        )
         validated_access_config = self._services.validate_access_config(
-            access_config,
+            self._merged_access_config(item),
             operation="query_devices",
             allow_raw_literals=False,
         )
-        raw_tags = item.get("tags")
+        raw_tags = self._mapped_value(item, "tags", DEFAULT_FIELD_MAP["tags"]) or item.get("tags")
         tags: builtins.list[Any] = raw_tags if isinstance(raw_tags, list) else []
         native_tags = tuple(
             str(tag.get("slug") or tag.get("name") or tag) if isinstance(tag, Mapping) else str(tag)
@@ -498,8 +593,13 @@ class NetBoxInventoryProvider(InventoryProvider):
             provider_id=self.id,
             external_id=external_id,
             name=name,
-            display_name=str(item.get("display") or name),
-            hostname=str(item.get("hostname") or name),
+            display_name=str(
+                self._mapped_value(item, "display_name", DEFAULT_FIELD_MAP["display_name"]) or name
+            ),
+            hostname=_optional_str(
+                self._mapped_value(item, "hostname", DEFAULT_FIELD_MAP["hostname"])
+            )
+            or name,
             mgmt_host=mgmt_host,
             # NetBox has no device-level management port; omit it and let the core
             # inventory service apply the default during materialization.
@@ -508,9 +608,7 @@ class NetBoxInventoryProvider(InventoryProvider):
             # service applies the default during materialization.
             platform=platform,
             vendor=None,
-            model=_optional_str((item.get("device_type") or {}).get("model"))
-            if isinstance(item.get("device_type"), Mapping)
-            else None,
+            model=model,
             site=site,
             role=str(role) if role else None,
             tags={"role": str(role)} if role else {},

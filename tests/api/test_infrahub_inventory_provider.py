@@ -27,12 +27,15 @@ from hegemony_inventory_sdk import (
 from tests.inventory_fakes import FakePlatformServices
 
 
-def _provider(*, token: str | None = None) -> InfrahubInventoryProvider:
+def _provider(
+    *, token: str | None = None, config: dict[str, Any] | None = None
+) -> InfrahubInventoryProvider:
     return InfrahubInventoryProvider(
         provider_id="infrahub:primary",
         config={
             "url": "https://infrahub.example",
             "token_ref": "{{ secret('vault://inventory/infrahub/token') }}",
+            **(config or {}),
         },
         services=FakePlatformServices(
             token=token, provider_id="infrahub:primary", provider_type="infrahub"
@@ -164,6 +167,54 @@ async def test_infrahub_auth_failures_include_safe_http_details(
         "status_code": status_code,
     }
     assert "private provider payload" not in envelope.message
+
+
+@pytest.mark.asyncio
+async def test_infrahub_graphql_failures_include_safe_graphql_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "errors": [
+                    {
+                        "message": "Cannot query field 'platform' on type 'InfraDevice'.",
+                        "path": ["InfraDevice", "edges", 0, "node", "platform"],
+                        "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"},
+                    }
+                ]
+            },
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handler))
+
+    provider = _provider(token="infrahub-token")
+
+    with pytest.raises(InventoryProviderError) as exc_info:
+        await provider._graphql(
+            "query { broken }",
+            {},
+            ProviderCallContext(
+                provider_id="infrahub:primary",
+                operation="auto_sync_sites",
+                query_hash="graphql-error-test",
+                config_version=1,
+            ),
+        )
+
+    envelope = exc_info.value.envelope
+    assert envelope.code == ProviderErrorCode.MALFORMED_QUERY
+    assert envelope.message == "Infrahub GraphQL query failed"
+    assert envelope.safe_details == {
+        "graphql_errors": [
+            {
+                "message": "Cannot query field 'platform' on type 'InfraDevice'.",
+                "path": ["InfraDevice", "edges", "0", "node", "platform"],
+                "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"},
+            }
+        ]
+    }
 
 
 @pytest.mark.asyncio
@@ -497,6 +548,133 @@ async def test_infrahub_query_devices_uses_branch_endpoint_limit_and_relationshi
     assert devices[0].site is not None
     assert devices[0].site.name == "ATL1"
     assert devices[0].native_tags == ("core",)
+
+
+@pytest.mark.asyncio
+async def test_infrahub_merges_default_access_config_with_mapped_device_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "InfraDevice": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "device-1",
+                                    "display_label": "atl1-edge1",
+                                    "name": {"value": "atl1-edge1"},
+                                    "primary_address": {
+                                        "node": {"address": {"value": "192.0.2.10/32"}}
+                                    },
+                                    "platform": {"node": {"name": {"value": "ios-xe"}}},
+                                    "role": {"value": "edge"},
+                                    "site": {"node": {"name": {"value": "ATL1"}}},
+                                    "tags": {"edges": []},
+                                    "hegemony_ssh_username_ref": {
+                                        "value": "{{ secret('vault://devices/atl1-edge1/user') }}"
+                                    },
+                                    "hegemony_enable_password_ref": {
+                                        "value": "{{ secret('vault://devices/atl1-edge1/enable') }}"
+                                    },
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handler))
+
+    provider = _provider(
+        token="infrahub-token",
+        config={
+            "field_map": {
+                "access_config.ssh.username_ref": "hegemony_ssh_username_ref.value",
+                "access_config.enable.password_ref": "hegemony_enable_password_ref.value",
+            },
+            "default_access_config": {
+                "ssh": {
+                    "password_ref": "{{ secret('vault://shared/infrahub/password') }}",
+                    "private_key_ref": "{{ secret('vault://shared/infrahub/key') }}",
+                }
+            },
+        },
+    )
+
+    devices = await provider.query_devices(
+        "",
+        limit=1,
+        context=ProviderCallContext(
+            provider_id=provider.id,
+            operation="auto_sync_devices",
+            query_hash="default-access-config-test",
+            config_version=1,
+        ),
+    )
+
+    assert "hegemony_ssh_username_ref { value }" in captured["query"]
+    assert "hegemony_enable_password_ref { value }" in captured["query"]
+    assert devices[0].access_config == {
+        "ssh": {
+            "username_ref": "{{ secret('vault://devices/atl1-edge1/user') }}",
+            "password_ref": "{{ secret('vault://shared/infrahub/password') }}",
+            "private_key_ref": "{{ secret('vault://shared/infrahub/key') }}",
+        },
+        "enable": {
+            "password_ref": "{{ secret('vault://devices/atl1-edge1/enable') }}",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_infrahub_list_sites_uses_site_only_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "InfraDevice": {
+                        "edges": [
+                            {"node": {"site": {"node": {"name": {"value": "ATL1"}}}}},
+                            {"node": {"site": {"node": {"name": {"value": "ATL1"}}}}},
+                            {"node": {"site": {"node": {"name": {"value": "ATL2"}}}}},
+                        ]
+                    }
+                }
+            },
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handler))
+
+    provider = _provider(token="infrahub-token")
+    sites = await provider.list_sites(
+        limit=5,
+        context=ProviderCallContext(
+            provider_id=provider.id,
+            operation="auto_sync_sites",
+            query_hash="site-query-shape-test",
+            config_version=1,
+        ),
+    )
+
+    assert [site.external_id for site in sites] == ["ATL1", "ATL2"]
+    assert "query HegemonyInventorySites" in captured["query"]
+    assert "site { node { name { value } } }" in captured["query"]
+    assert "primary_address" not in captured["query"]
+    assert "platform" not in captured["query"]
+    assert "tags" not in captured["query"]
 
 
 def test_infrahub_config_normalizes_field_map_entries() -> None:

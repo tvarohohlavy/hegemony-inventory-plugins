@@ -10,11 +10,22 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
-DEFAULT_CUSTOM_FIELD_MAP = {
-    "ssh.username_ref": "hegemony_ssh_username_ref",
-    "ssh.password_ref": "hegemony_ssh_password_ref",
-    "enable.password_ref": "hegemony_enable_password_ref",
-    "ssh.private_key_ref": "hegemony_ssh_private_key_ref",
+DEFAULT_FIELD_MAP = {
+    "external_id": "id",
+    "name": "name",
+    "display_name": "display",
+    "hostname": "hostname",
+    "mgmt_host": "primary_ip4.address",
+    "platform": "platform.slug",
+    "model": "device_type.model",
+    "site.external_id": "site.slug",
+    "site.name": "site.name",
+    "role": "role.slug",
+    "tags": "tags",
+    "access_config.ssh.username_ref": "custom_fields.hegemony_ssh_username_ref",
+    "access_config.ssh.password_ref": "custom_fields.hegemony_ssh_password_ref",
+    "access_config.enable.password_ref": "custom_fields.hegemony_enable_password_ref",
+    "access_config.ssh.private_key_ref": "custom_fields.hegemony_ssh_private_key_ref",
 }
 
 
@@ -43,7 +54,7 @@ class NetBoxProviderConfig(BaseModel):
         description="Fallback Authorization schemes retried after auth failures when the token is unprefixed.",
     )
     verify_tls: bool = True
-    custom_field_map: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_CUSTOM_FIELD_MAP))
+    field_map: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_FIELD_MAP))
     default_access_config: dict[str, Any] = Field(default_factory=dict)
     query_cache_ttl_seconds: int | None = Field(None, ge=0, le=86400)
     timeout_seconds: float = Field(10.0, gt=0, le=120)
@@ -77,6 +88,19 @@ class NetBoxProviderConfig(BaseModel):
         else:
             raise ValueError("auth_fallback_schemes must be a list or comma-separated string")
         return [item for item in candidates if item]
+
+    @field_validator("field_map")
+    @classmethod
+    def normalize_field_map(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, path in value.items():
+            if not isinstance(key, str) or not isinstance(path, str):
+                continue
+            stripped_key = key.strip()
+            stripped_path = path.strip()
+            if stripped_key and stripped_path:
+                normalized[stripped_key] = stripped_path
+        return normalized
 
     def safe_config(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

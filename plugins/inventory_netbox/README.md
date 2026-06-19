@@ -17,13 +17,9 @@ the `hegemony.inventory_plugins` entry-point group
 ## Install
 
 Provider wheels are **opt-in** — they are not bundled in the default images.
-
-```bash
-pip install hegemony-inventory-netbox
-# restart the API/worker so the plugin is registered
-```
-
-For Docker, add the wheel to the image that runs the API and the inventory worker.
+See the root
+[Install From A Release](../../README.md#install-from-a-release) guide for Docker
+commands, checksum verification, and local-wheel development installs.
 
 ## Configure
 
@@ -38,7 +34,7 @@ rendered automatically and `token_ref` gets a secret picker.
 | `auth_scheme` | no | `Bearer` | Authorization scheme prefixed to the resolved token |
 | `auth_fallback_schemes` | no | `["Token"]` | Schemes retried on auth failure |
 | `verify_tls` | no | `true` | Verify the TLS certificate |
-| `custom_field_map` | no | ssh/enable refs | Maps `access_config` paths → NetBox custom fields |
+| `field_map` | no | built-in | Maps normalized inventory fields → NetBox REST payload paths, including optional `access_config.*` refs under `custom_fields` |
 | `default_access_config` | no | `{}` | Access-config defaults applied to every device |
 | `query_cache_ttl_seconds` | no | `null` | Optional query cache TTL (0–86400 s) |
 | `timeout_seconds` | no | `10` | Per-request timeout |
@@ -52,12 +48,41 @@ Minimal config:
 }
 ```
 
+Built-in `field_map` defaults:
+
+```json
+{
+  "external_id": "id",
+  "name": "name",
+  "display_name": "display",
+  "hostname": "hostname",
+  "mgmt_host": "primary_ip4.address",
+  "platform": "platform.slug",
+  "model": "device_type.model",
+  "site.external_id": "site.slug",
+  "site.name": "site.name",
+  "role": "role.slug",
+  "tags": "tags",
+  "access_config.ssh.username_ref": "custom_fields.hegemony_ssh_username_ref",
+  "access_config.ssh.password_ref": "custom_fields.hegemony_ssh_password_ref",
+  "access_config.enable.password_ref": "custom_fields.hegemony_enable_password_ref",
+  "access_config.ssh.private_key_ref": "custom_fields.hegemony_ssh_private_key_ref"
+}
+```
+
 ### Platform
 
 The device `platform` is mapped from NetBox's native `platform.slug`. When a device has
 no platform in NetBox, the provider emits no value and the **core inventory service**
 applies its default platform during materialization — there is no per-provider platform
 setting.
+
+### Access config
+
+The same generic `field_map` also controls optional access-config refs. For example,
+`access_config.ssh.username_ref` can point at a `custom_fields.*` path in the NetBox device
+payload. Provider-level `default_access_config` is merged first, and mapped device-specific
+values override those defaults when present.
 
 ## Supported object types
 
